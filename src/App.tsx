@@ -30,8 +30,7 @@ body {
 .sidebar-btn { width: 100%; text-align: left; padding: 14px 16px; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 8px; font-size: 13px; font-weight: 600; transition: all 0.2s; display: flex; align-items: center; justify-content: space-between; cursor: pointer; background: white; }
 .sidebar-btn:hover { border-color: #3b82f6; background-color: #eff6ff; color: #1d4ed8; }
 .sidebar-btn.active { border-color: #3b82f6; background-color: #2563eb; color: white; border: none; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.15); }
-.gen-all-btn { background-color: #2563eb !important; color: white !important; border: none !important; opacity: 1 !important; }
-.gen-all-btn:hover { background-color: #1d4ed8 !important; }
+.gen-all-btn { background-color: #2563eb !important; color: white !important; border: none !important; opacity: 1 !important; box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.4); }
 
 /* --- PREMIUM BLUE DESIGN --- */
 .main-title-bar {
@@ -153,14 +152,23 @@ body {
 
 [contenteditable="true"]:focus { outline: 2px dashed #3b82f6; background-color: #eff6ff; border-radius: 4px; padding: 2px; }
 
-.vocab-grid { display: grid; grid-template-cols: 1fr 1fr; gap: 16px; row-gap: 20px; column-gap: 32px; }
-.vocab-item { border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; display: flex; justify-content: space-between; align-items: flex-end; }
-.vocab-word { font-weight: 800; font-size: 17px; color: #1e293b; }
-.vocab-meaning { font-size: 14px; color: #64748b; font-weight: 500; }
+.vocab-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+.vocab-table th { background-color: #1e40af; color: white; padding: 10px; text-align: left; font-size: 14px; border: 1px solid #1e40af; }
+.vocab-table td { padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #334155; vertical-align: top; }
+.vocab-table tr:last-child td { border-bottom: none; }
+.vocab-word { font-weight: 800; font-size: 15px; color: #1e293b; }
+.vocab-mean { font-weight: 600; color: #3b82f6; }
+.vocab-meta { font-size: 12px; color: #64748b; line-height: 1.4; }
+.confusable-section { margin-top: 32px; border-top: 2px dashed #cbd5e1; padding-top: 20px; }
+.confusable-title { font-weight: 800; color: #ef4444; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; font-size: 16px; }
+.confusable-grid { display: grid; grid-template-cols: 1fr; gap: 12px; }
+.confusable-item { background: #fff1f2; padding: 12px; border-radius: 8px; border: 1px solid #fecdd3; display: flex; align-items: center; justify-content: space-between; }
+.confusable-word { font-weight: 700; color: #9f1239; }
 
 .ordering-box { background: #f8fafc; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 20px; font-weight: 600; }
 .abc-block { margin-top: 16px; display: flex; gap: 12px; }
 .abc-label { font-weight: 900; color: #2563eb; font-size: 18px; min-width: 24px; }
+u { text-underline-offset: 5px; text-decoration-color: #3b82f6; font-weight: 700; padding: 0 4px; text-decoration-thickness: 3px; }
 `;
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -206,11 +214,11 @@ export default function App() {
     // Explicitly ask for JSON
     const base = `Act as an English Workbook Generator. Analyze this text: "${text}". You MUST return a valid JSON object.`;
     switch (partId) {
-      case 'p0': return `${base} Task: Extract 15 advanced words. Schema: { "vocabulary": [{ "word": "...", "mean": "..." }] }`;
+      case 'p0': return `${base} Task: Extract 12 advanced words with synonyms/antonyms. Also find 2 pairs of confusable words. IMPORTANT: Meanings (mean, m1, m2) MUST be in KOREAN. Schema: { "vocabulary": [{ "word": "...", "mean": "...", "syn": "...", "ant": "..." }], "confusable": [{ "w1": "...", "m1": "...", "w2": "...", "m2": "..." }] }`;
       case 'p1': return `${base} Task: Translate sentence by sentence. Schema: { "translation": [{ "en": "...", "ko": "..." }] }`;
-      case 'p2': return `${base} Task: Select 5 key sentences. Schema: { "keySentences": [{ "en": "...", "ko": "..." }] }`;
-      case 'p3': return `${base} Task: Ordering question. Intro Box + A/B/C. Schema: { "ordering": { "box": "...", "A": "...", "B": "...", "C": "..." } }`;
-      case 'p4': return `${base} Task: Grammar choice (select 8 points with [A / B]). Schema: { "grammar": { "text": "...", "ko": "..." } }`;
+      case 'p2': return `${base} Task: Select 5 key sentences. Provide Korean translation and a scrambled list of words for writing practice. Schema: { "keySentences": [{ "ko": "...", "words": ["word1", "word2", "..."] }] }`;
+      case 'p3': return `${base} Task: Create an ordering problem. 1. Identify the first sentence. 2. Scramble the REST of the sentences. Schema: { "ordering": { "firstSentence": "...", "scrambledSentences": ["...", "...", "..."] } }`;
+      case 'p4': return `${base} Task: Grammar Correction. 1. Generate "incorrectParagraph": You MUST include the ENTIRE original text. In this text, mark 8 grammatical points with circled numbers and underlines (e.g. ① <u>word</u>). 3-4 of these MUST be grammatically incorrect forms that need correction. 2. Generate "corrections": Check list for all 8 points. Schema: { "grammar": { "incorrectParagraph": "<p>...Full text with tags...</p>", "corrections": [{ "num": 1, "word": "...", "correct": "...", "reason": "..." }] } }`;
       case 'p5': return `${base} Task: Blanks with hints (a_______). Schema: { "blanks": { "text": "...", "ko": "..." } }`;
       case 'p6': return `${base} Task: 5 T/F questions. Schema: { "tf": [{ "q": "...", "a": true }] }`;
       case 'p7': return `${base} Task: Full text translation. Schema: { "fullTranslation": [{ "en": "...", "ko": "..." }] }`;
@@ -358,9 +366,9 @@ export default function App() {
           </div>
           <div className="flex-1 overflow-y-auto space-y-1">
             <button onClick={() => handleGenerate('all')} className="sidebar-btn gen-all-btn mb-4" style={{ minHeight: '56px', whiteSpace: 'nowrap', justifyContent: 'center' }}>
-              {isLoading && loadingPart === 'all' ? <><span className="animate-spin mr-2 flex-shrink-0">⏳</span>생성 중...</> : "⚡ 전체 워크북 생성"}
+              {isLoading && loadingPart === 'all' ? <><span className="animate-spin mr-2 flex-shrink-0">⌛</span>생성 중...</> : "⚡ 전체 워크북 생성"}
             </button>
-            {['어휘', '해석', '영작', '순서', '어법', '빈칸', '내용', '통문장', '배열', '조건', '요약'].map((n, i) => (<button key={i} onClick={() => handleGenerate(`p${i}`)} className={`sidebar-btn ${viewPart === `p${i}` ? 'active' : ''}`}>Part {i}. {n}</button>))}
+            {['어휘', '해석', '중요문장 영작', '글의 순서', '어법 고치기', '빈칸', '내용', '통문장', '배열', '조건', '요약'].map((n, i) => (<button key={i} onClick={() => handleGenerate(`p${i}`)} className={`sidebar-btn ${viewPart === `p${i}` ? 'active' : ''}`}>Part {i}. {n}</button>))}
           </div>
           <button onClick={handleDownloadHTML} className="w-full bg-blue-50 text-blue-600 py-3 rounded font-bold text-xs mt-4">HTML 다운로드</button>
         </aside>
@@ -389,14 +397,32 @@ export default function App() {
 
         {passages.map(p => {
           const wb = workbooks[p.id] || { passageName: p.name || 'Title', data: {} };
-          const data = wb.data || {};
+          const rawData = wb.data || {};
+          // Helper functions to normalize data types
+          const ensureArray = (d: any) => Array.isArray(d) ? d : (d ? [d] : []);
+          const ensureObject = (d: any) => Array.isArray(d) ? (d[0] || {}) : (d || {});
+
+          const data: any = {
+            vocabulary: ensureArray(rawData.vocabulary),
+            confusable: ensureArray(rawData.confusable),
+            translation: ensureArray(rawData.translation),
+            keySentences: ensureArray(rawData.keySentences),
+            ordering: ensureObject(rawData.ordering),
+            grammar: ensureObject(rawData.grammar),
+            blanks: ensureObject(rawData.blanks),
+            tf: ensureArray(rawData.tf),
+            fullTranslation: ensureArray(rawData.fullTranslation),
+            arrangement: ensureArray(rawData.arrangement),
+            guided: ensureArray(rawData.guided),
+            summary: ensureObject(rawData.summary),
+          };
           const name = wb.passageName;
           const isFailed = failedPassages.has(p.id);
 
           const isTarget = (k: string) => (viewPart === 'all' || viewPart === k);
           const hasData = (d: any) => (d && (Array.isArray(d) ? d.length > 0 : Object.keys(d).length > 0));
 
-          const Part = (key: string, title: string, step: string, content: React.ReactNode) => {
+          const Part = (key: string, title: string, step: string, content: React.ReactNode, showTranslationDiv: boolean = true) => {
             if (!isTarget(key)) return null;
             const map: any = {
               p0: 'vocabulary', p1: 'translation', p2: 'keySentences', p3: 'ordering',
@@ -406,29 +432,91 @@ export default function App() {
             const dataKey = map[key];
             const realData = data[dataKey];
 
+            // Render FRAME first, then content or loading. 
+            // This prevents "white screen" because the component structure always exists.
             let inner = content;
             if (!hasData(realData)) {
               if (isFailed) {
-                inner = <div className="error-box">생성 실패: 잠시 후 다시 시도해주세요.</div>;
+                inner = <div className="error-box">생성 실패: 잠시 후 다시 시도해주세요.</div>
               } else {
-                inner = <div className="loading-box"><div className="font-bold text-lg">TOP ENGLISH ACADEMY</div><div className="text-sm">AI가 문제를 생성하는 중입니다...</div></div>;
+                // Keep the structure but show loading text
+                inner = (
+                  <div className="w-full py-20 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-lg bg-slate-50 text-slate-400">
+                    <div className="animate-spin text-2xl mb-2">⌛</div>
+                    <div className="font-bold">AI가 문제를 생성하고 있습니다...</div>
+                  </div>
+                );
               }
             }
-            return renderWorkbookCard(name, title, step, inner);
+
+            return renderWorkbookCard(name, title, step, inner, showTranslationDiv ? 'Translation' : undefined);
           };
 
           return (
             <div key={p.id}>
-              {Part('p0', 'Vocabulary', 'PART 00', <div className="vocab-grid">{Array.isArray(data.vocabulary) && data.vocabulary.map((v: any, k: number) => <div key={k} className="vocab-item"><span className="vocab-word" {...editProps}>{v.word}</span><span className="vocab-meaning" {...editProps}>{!isStudentMode && v.mean}</span></div>)}</div>)}
-              {Part('p1', 'One-Line Translation', 'PART 01', <div className="space-y-6">{Array.isArray(data.translation) && data.translation.map((s: any, k: number) => <div key={k}><div className="font-medium mb-2 leading-relaxed" {...editProps}><span className="text-blue-600 font-bold mr-2">{k + 1}.</span>{s.en}</div><div className="pl-6 text-sm text-slate-500" {...editProps}>{!isStudentMode && s.ko}</div></div>)}</div>)}
-              {Part('p2', 'Key Sentences', 'PART 02', <div className="space-y-8">{Array.isArray(data.keySentences) && data.keySentences.map((s: any, k: number) => <div key={k}><div className="font-bold text-lg mb-2" {...editProps}>{k + 1}. {s.ko}</div><div className="p-3 bg-slate-50 rounded border border-slate-200 min-h-[40px]" {...editProps}>{!isStudentMode && s.en}</div></div>)}</div>)}
-              {Part('p3', 'Ordering', 'PART 03', <div><div className="ordering-box" {...editProps}>{data.ordering?.box}</div>{['A', 'B', 'C'].map(char => <div key={char} className="abc-block"><span className="abc-label">({char})</span><div className="leading-relaxed" {...editProps}>{data.ordering?.[char]}</div></div>)}</div>)}
-              {Part('p4', 'Grammar Choice', 'PART 04', <div className="leading-loose text-justify" {...editProps}>{data.grammar?.text}</div>, data.grammar?.ko)}
+              {Part('p0', 'Vocabulary Mastery', 'PART 00',
+                <div>
+                  <table className="vocab-table">
+                    <thead><tr><th style={{ width: '25%' }}>Word</th><th style={{ width: '25%' }}>Meaning</th><th style={{ width: '25%' }}>Synonym</th><th style={{ width: '25%' }}>Antonym</th></tr></thead>
+                    <tbody>
+                      {Array.isArray(data.vocabulary) && data.vocabulary.map((v: any, k: number) => (
+                        <tr key={k}>
+                          <td><div className="vocab-word" {...editProps}>{v?.word}</div></td>
+                          <td><div className="vocab-mean" {...editProps}>{!isStudentMode && v?.mean}</div></td>
+                          <td><div className="vocab-meta" {...editProps}>{!isStudentMode && v?.syn}</div></td>
+                          <td><div className="vocab-meta" {...editProps}>{!isStudentMode && v?.ant}</div></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {data.confusable && data.confusable.length > 0 && (
+                    <div className="confusable-section">
+                      <div className="confusable-title">⚠️ Confusable Words</div>
+                      <div className="confusable-grid">
+                        {data.confusable.map((c: any, k: number) => (
+                          <div key={k} className="confusable-item">
+                            <div><span className="confusable-word">{c?.w1}</span> <span className="text-sm text-slate-600">({!isStudentMode && c?.m1})</span></div>
+                            <div className="text-slate-400 font-bold text-xs mx-4">VS</div>
+                            <div className="text-right"><span className="confusable-word">{c?.w2}</span> <span className="text-sm text-slate-600">({!isStudentMode && c?.m2})</span></div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {Part('p1', 'One-Line Translation', 'PART 01', <div className="space-y-6">{Array.isArray(data.translation) && data.translation.map((s: any, k: number) => <div key={k}><div className="font-medium leading-relaxed mb-3" {...editProps}><span className="text-blue-600 font-bold mr-2">{k + 1}.</span>{s?.en}</div><div className="pl-6 border-b border-slate-300 h-8 mb-2"></div></div>)}</div>, false)}
+              {Part('p2', '중요문장 영작', 'PART 02', <div className="space-y-10">{Array.isArray(data.keySentences) && data.keySentences.map((s: any, k: number) => <div key={k}><div className="font-bold text-lg mb-2" {...editProps}>{k + 1}. {s?.ko}</div><div className="text-sm bg-blue-50 text-blue-800 p-3 rounded mb-4" {...editProps}>Hint: {Array.isArray(s?.words) ? s.words.join(' / ') : ''}</div><div className="border-b border-slate-300 h-8"></div></div>)}</div>, false)}
+              {Part('p3', '글의 순서', 'PART 03', <div><div className="ordering-box" {...editProps}>{data.ordering?.firstSentence}</div><div className="space-y-4 mb-8">{Array.isArray(data.ordering?.scrambledSentences) && data.ordering?.scrambledSentences.map((s: string, k: number) => <div key={k} className="flex gap-3"><div className="font-bold text-blue-600 text-lg flex-shrink-0">{['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧'][k] || (k + 1)}</div><div className="leading-relaxed" {...editProps}>{s}</div></div>)}</div><div className="border-t-2 border-slate-200 pt-4 flex items-end gap-2"><span className="font-bold text-slate-700">Answer:</span><div className="border-b-2 border-slate-300 w-48"></div></div></div>, false)}
+              {Part('p4', '어법 고치기', 'PART 04',
+                <div>
+                  <div className="passage-box mb-8" style={{ minHeight: '150px', lineHeight: '2.2' }}>
+                    {data.grammar?.incorrectParagraph
+                      ? <div dangerouslySetInnerHTML={{ __html: data.grammar.incorrectParagraph }} {...editProps} />
+                      : <div className="h-full flex items-center justify-center text-slate-400 italic">지문을 생성하고 있습니다...</div>
+                    }
+                  </div>
+                  <table className="vocab-table">
+                    <thead><tr><th style={{ width: '8%' }}>No.</th><th style={{ width: '27%' }}>Expression</th><th style={{ width: '27%' }}>Correction</th><th style={{ width: '38%' }}>Reason</th></tr></thead>
+                    <tbody>
+                      {Array.isArray(data.grammar?.corrections) && data.grammar.corrections.map((c: any, k: number) => (
+                        <tr key={k}>
+                          <td className="font-bold text-center text-blue-600">{c?.num ? (['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧'][c.num - 1] || c.num) : (k + 1)}</td>
+                          <td className="font-bold">{c?.word}</td>
+                          <td className="text-blue-600 font-bold">{!isStudentMode && c?.correct}</td>
+                          <td className="text-xs text-slate-500">{!isStudentMode && c?.reason}</td>
+                        </tr>
+                      ))}
+                      {(!data.grammar?.corrections || data.grammar.corrections.length === 0) && [1, 2, 3, 4, 5, 6, 7, 8].map(i => <tr key={i}><td className="font-bold text-center text-blue-600">{['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧'][i - 1]}</td><td></td><td></td><td></td></tr>)}
+                    </tbody>
+                  </table>
+                </div>
+                , false)}
               {Part('p5', 'Fill In Blanks', 'PART 05', <div className="leading-loose text-justify" {...editProps}>{data.blanks?.text}</div>, data.blanks?.ko)}
-              {Part('p6', 'Content Check', 'PART 06', <div className="space-y-4">{Array.isArray(data.tf) && data.tf.map((q: any, k: number) => <div key={k} className="flex justify-between border-b pb-2 items-center"><span {...editProps}>{k + 1}. {q.q}</span><span className="font-bold font-mono ml-4 text-slate-400">{!isStudentMode ? (q.a ? '( T )' : '( F )') : '(   )'}</span></div>)}</div>)}
-              {Part('p7', 'Full Writing', 'PART 07', <div className="space-y-8">{Array.isArray(data.fullTranslation) && data.fullTranslation.map((s: any, k: number) => <div key={k}><div className="font-bold mb-2" {...editProps}>{k + 1}. {s.en}</div><div className="border-b border-slate-300 h-8"></div></div>)}</div>)}
-              {Part('p8', 'Word Arrangement', 'PART 08', <div className="space-y-8">{Array.isArray(data.arrangement) && data.arrangement.map((s: any, k: number) => <div key={k}><div className="font-bold mb-2" {...editProps}>{k + 1}. {s.ko}</div><div className="text-sm bg-slate-50 p-2 rounded text-slate-500 italic mb-4" {...editProps}>{s.scrambled}</div><div className="border-b border-slate-300 h-8"></div></div>)}</div>)}
-              {Part('p9', 'Guided Writing', 'PART 09', <div className="space-y-8">{Array.isArray(data.guided) && data.guided.map((s: any, k: number) => <div key={k}><div className="font-bold mb-2" {...editProps}>{k + 1}. {s.ko}</div><div className="text-xs font-bold text-blue-600 mb-4">[조건] <span {...editProps}>{s.clue}</span></div><div className="border-b border-slate-300 h-8"></div></div>)}</div>)}
+              {Part('p6', 'Content Check', 'PART 06', <div className="space-y-4">{Array.isArray(data.tf) && data.tf.map((q: any, k: number) => <div key={k} className="flex justify-between border-b pb-2 items-center"><span {...editProps}>{k + 1}. {q?.q}</span><span className="font-bold font-mono ml-4 text-slate-400">{!isStudentMode ? (q?.a ? '( T )' : '( F )') : '(   )'}</span></div>)}</div>)}
+              {Part('p7', 'Full Writing', 'PART 07', <div className="space-y-8">{Array.isArray(data.fullTranslation) && data.fullTranslation.map((s: any, k: number) => <div key={k}><div className="font-bold mb-2" {...editProps}>{k + 1}. {s?.en}</div><div className="border-b border-slate-300 h-8"></div></div>)}</div>)}
+              {Part('p8', 'Word Arrangement', 'PART 08', <div className="space-y-8">{Array.isArray(data.arrangement) && data.arrangement.map((s: any, k: number) => <div key={k}><div className="font-bold mb-2" {...editProps}>{k + 1}. {s?.ko}</div><div className="text-sm bg-slate-50 p-2 rounded text-slate-500 italic mb-4" {...editProps}>{s?.scrambled}</div><div className="border-b border-slate-300 h-8"></div></div>)}</div>)}
+              {Part('p9', 'Guided Writing', 'PART 09', <div className="space-y-8">{Array.isArray(data.guided) && data.guided.map((s: any, k: number) => <div key={k}><div className="font-bold mb-2" {...editProps}>{k + 1}. {s?.ko}</div><div className="text-xs font-bold text-blue-600 mb-4">[조건] <span {...editProps}>{s?.clue}</span></div><div className="border-b border-slate-300 h-8"></div></div>)}</div>)}
               {Part('p10', 'Summary', 'PART 10', <div><div className="leading-loose text-lg mb-8" {...editProps}>{data.summary?.text}</div><div className="border-2 border-dashed border-slate-300 p-4 rounded text-center"><span className="font-bold bg-slate-800 text-white px-2 py-1 text-xs rounded mr-2">KEYWORDS</span><span {...editProps}>{!isStudentMode ? (Array.isArray(data.summary?.keywords) ? data.summary.keywords.join(', ') : '') : ''}</span></div></div>)}
             </div>
           );
