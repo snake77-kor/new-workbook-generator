@@ -187,6 +187,13 @@ u { text-underline-offset: 5px; text-decoration-color: #3b82f6; font-weight: 700
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+const PARTS_LIST = [
+  { id: 'p0', label: '어휘' }, { id: 'p1', label: '한글해석' }, { id: 'p3', label: '글의 순서' },
+  { id: 'p4', label: '어법 고치기' }, { id: 'p5', label: '빈칸채우기' }, { id: 'p6', label: '내용 일치/불일치' },
+  { id: 'p8', label: '단어배열 영작' }, { id: 'p9', label: '조건 영작' }, { id: 'p7', label: '통문장 영작' },
+  { id: 'p2', label: '중요문장 영작' }, { id: 'p10', label: '요약문 빈칸' }
+];
+
 export default function App() {
   const [apiKey, setApiKey] = useState(() => {
     if (typeof window !== 'undefined') return localStorage.getItem('top_english_key') || '';
@@ -198,6 +205,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadingPart, setLoadingPart] = useState<string | null>(null);
   const [viewPart, setViewPart] = useState('all');
+  const [selectedParts, setSelectedParts] = useState<Set<string>>(new Set());
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
@@ -211,6 +219,13 @@ export default function App() {
   const handleKeyChange = (e: any) => {
     setApiKey(e.target.value);
     localStorage.setItem('top_english_key', e.target.value);
+  };
+
+  const togglePart = (id: string) => {
+    const newSet = new Set(selectedParts);
+    if (newSet.has(id)) newSet.delete(id);
+    else newSet.add(id);
+    setSelectedParts(newSet);
   };
 
   const handleDownloadHTML = () => {
@@ -284,62 +299,83 @@ export default function App() {
     const targets = passages.filter(p => p.content.trim());
     if (targets.length === 0) { setErrorMsg('지문 없음'); return; }
 
-    setIsLoading(true); setLoadingPart(partId); setViewPart(partId); setProgress({ current: 0, total: targets.length });
+    setIsLoading(true); setLoadingPart(partId); setViewPart(partId);
     setFailedPassages(new Set());
     setFailureReasons({});
 
+    // Define the sequence of parts to generate
+    const tasks = partId === 'all'
+      ? ['p0', 'p1', 'p3', 'p4', 'p5', 'p6', 'p8', 'p9', 'p7', 'p2', 'p10']
+      : [partId];
+
+    // Calculate total operations for progress bar
+    const totalOps = targets.length * tasks.length;
+    setProgress({ current: 0, total: totalOps });
+
     try {
       const modelName = await discoverModel(cleanKey);
+      let opIndex = 0;
 
-      for (let i = 0; i < targets.length; i++) {
-        const p = targets[i];
-        setProgress({ current: i + 1, total: targets.length });
-        setStatusMsg(`🚀 [${i + 1}/${targets.length}] ${modelName} 생성 중...`);
+      for (const pid of tasks) {
+        for (let i = 0; i < targets.length; i++) {
+          const p = targets[i];
+          opIndex++;
+          setProgress({ current: opIndex, total: totalOps });
 
-        try {
-          const data = await fetchWithRetry(
-            `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${cleanKey}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              // Enable JSON mode in config for safer parsing
-              body: JSON.stringify({
-                contents: [{ parts: [{ text: getPrompt(partId, p.content) }] }],
-                generationConfig: { responseMimeType: "application/json" }
-              })
-            }
-          );
+          const partNameMap: Record<string, string> = {
+            p0: '어휘', p1: '해석', p2: '중요문장', p3: '순서', p4: '어법', p5: '빈칸',
+            p6: '일치', p7: '통문장', p8: '배열', p9: '조건', p10: '요약'
+          };
+          const pLabel = partNameMap[pid] || pid;
+          setStatusMsg(`🚀 [${opIndex}/${totalOps}] ${modelName} : ${pLabel} 생성 중...`);
 
-          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (!text) throw new Error('No generated text found.');
-
-          // More robust JSON parsing
-          let newData;
           try {
-            newData = JSON.parse(text);
-          } catch (e) {
-            // Fallback: try finding json block if JSON mode wasn't perfect
-            const jsonStart = text.indexOf('{');
-            const jsonEnd = text.lastIndexOf('}');
-            if (jsonStart !== -1 && jsonEnd !== -1) {
-              newData = JSON.parse(text.substring(jsonStart, jsonEnd + 1));
-            } else {
-              throw new Error("Invalid JSON structure");
+            const data = await fetchWithRetry(
+              `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${cleanKey}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{ parts: [{ text: getPrompt(pid, p.content) }] }],
+                  generationConfig: { responseMimeType: "application/json" }
+                })
+              }
+            );
+
+            const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (!text) throw new Error('No generated text found.');
+
+            let newData;
+            try {
+              newData = JSON.parse(text);
+            } catch (e) {
+              const jsonStart = text.indexOf('{');
+              const jsonEnd = text.lastIndexOf('}');
+              if (jsonStart !== -1 && jsonEnd !== -1) {
+                newData = JSON.parse(text.substring(jsonStart, jsonEnd + 1));
+              } else {
+                throw new Error("Invalid JSON structure");
+              }
+            }
+
+            setWorkbooks((prev: any) => ({
+              ...prev, [p.id]: { passageName: p.name || `Unit ${i + 1}`, data: { ...(prev[p.id]?.data || {}), ...newData } }
+            }));
+
+          } catch (innerErr: any) {
+            console.error(`Generate Error (${pid})`, innerErr);
+            // If it's a single part request, mark as failed. If 'all', just log and continue (partial success).
+            if (tasks.length === 1) {
+              setFailedPassages(prev => new Set(prev).add(p.id));
+              setFailureReasons(prev => ({ ...prev, [p.id]: innerErr.message || "Unknown error" }));
             }
           }
 
-          setWorkbooks((prev: any) => ({
-            ...prev, [p.id]: { passageName: p.name || `Unit ${i + 1}`, data: { ...(prev[p.id]?.data || {}), ...newData } }
-          }));
-
-        } catch (innerErr: any) {
-          console.error("Passage Gen Error", innerErr);
-          setFailedPassages(prev => new Set(prev).add(p.id));
-          setFailureReasons(prev => ({ ...prev, [p.id]: innerErr.message || "Unknown error" }));
-          // Continue to next passage 
+          // Delay to help avoid 429 errors (Rate Limit)
+          if (opIndex < totalOps) {
+            await delay(1200);
+          }
         }
-
-        if (i < targets.length - 1) { setStatusMsg("⏳ 쿨다운 (2.5초)..."); await delay(2500); }
       }
       setStatusMsg("✅ 완료!"); setTimeout(() => setStatusMsg(null), 4000);
     } catch (e: any) { setErrorMsg(e.message); } finally { setIsLoading(false); setLoadingPart(null); setProgress({ current: 0, total: 0 }); }
@@ -377,18 +413,30 @@ export default function App() {
 
           </div>
           <div className="flex-1 overflow-y-auto space-y-1">
-            <button onClick={() => handleGenerate('all')} className="sidebar-btn gen-all-btn mb-4" style={{ minHeight: '56px', whiteSpace: 'nowrap', justifyContent: 'center' }}>
-              {isLoading && loadingPart === 'all' ? <><span className="animate-spin mr-2 flex-shrink-0">⌛</span>생성 중...</> : "⚡ 전체 워크북 생성"}
+            <button
+              onClick={() => handleGenerate(selectedParts.size > 0 ? 'selected' : 'all')}
+              className="sidebar-btn gen-all-btn mb-4 w-full"
+              style={{ minHeight: '56px', whiteSpace: 'nowrap', justifyContent: 'center' }}
+            >
+              {isLoading && (loadingPart === 'all' || loadingPart === 'selected')
+                ? <><span className="animate-spin mr-2 flex-shrink-0">⌛</span>생성 중...</>
+                : (selectedParts.size > 0 ? `⚡ 선택 항목 생성 (${selectedParts.size})` : "⚡ 전체 워크북 생성")
+              }
             </button>
-            {[
-              { id: 'p0', label: '어휘' }, { id: 'p1', label: '한글해석' }, { id: 'p3', label: '글의 순서' },
-              { id: 'p4', label: '어법 고치기' }, { id: 'p5', label: '빈칸채우기' }, { id: 'p6', label: '내용 일치/불일치' },
-              { id: 'p8', label: '단어배열 영작' }, { id: 'p9', label: '조건 영작' }, { id: 'p7', label: '통문장 영작' },
-              { id: 'p2', label: '중요문장 영작' }, { id: 'p10', label: '요약문 빈칸' }
-            ].map((item, i) => (
-              <button key={i} onClick={() => handleGenerate(item.id)} className={`sidebar-btn ${viewPart === item.id ? 'active' : ''}`}>
-                Part {i + 1}. {item.label}
-              </button>
+            {PARTS_LIST.map((item, i) => (
+              <div key={i} className="flex gap-2 items-center mb-1">
+                <div className="h-full flex items-center">
+                  <input
+                    type="checkbox"
+                    className="w-5 h-5 accent-blue-600 cursor-pointer"
+                    checked={selectedParts.has(item.id)}
+                    onChange={() => togglePart(item.id)}
+                  />
+                </div>
+                <button onClick={() => handleGenerate(item.id)} className={`sidebar-btn flex-1 mb-0 justify-between ${viewPart === item.id ? 'active' : ''}`}>
+                  <span>Part {i + 1}. {item.label}</span>
+                </button>
+              </div>
             ))}
           </div>
           <button onClick={handleDownloadHTML} className="w-full bg-blue-50 text-blue-600 py-3 rounded font-bold text-xs mt-4">HTML 다운로드</button>
@@ -547,7 +595,7 @@ export default function App() {
                       {Array.isArray(data.grammar?.corrections) && data.grammar.corrections.map((c: any, k: number) => (
                         <tr key={k}>
                           <td className="font-bold text-center text-blue-600">{c?.num ? (['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧'][c.num - 1] || c.num) : (k + 1)}</td>
-                          <td className="font-bold">{c?.word}</td>
+                          <td className="font-bold h-10 align-middle border-b border-slate-100" {...editProps}></td>
                           <td className="text-blue-600 font-bold h-10 align-middle border-b border-slate-100" {...editProps}></td>
                           <td className="text-xs text-slate-500 h-10 align-middle border-b border-slate-100" {...editProps}></td>
                         </tr>
@@ -594,7 +642,21 @@ export default function App() {
               {Part('p9', '조건 영작', 'PART 08', <div className="space-y-12">{Array.isArray(data.guided) && data.guided.map((s: any, k: number) => <div key={k}><div className="flex items-start mb-2"><span className="font-bold text-blue-600 mr-2 mt-1">{k + 1}.</span><div className="font-bold text-lg leading-relaxed text-slate-800" {...editProps}>{s?.ko}</div></div><div className="text-sm rounded mb-4 ml-6" {...editProps}><span className="font-bold text-blue-600 mr-2">Hint:</span>{Array.isArray(s?.words) ? s.words.join(', ') : s?.words}</div><div className="ml-6 border-b border-slate-300 h-8"></div></div>)}</div>, false)}
               {Part('p7', '통문장 영작', 'PART 09', <div className="space-y-12">{Array.isArray(data.fullTranslation) && data.fullTranslation.map((s: any, k: number) => <div key={k}><div className="flex items-start mb-2"><span className="font-bold text-blue-600 mr-2 mt-1">{k + 1}.</span><div className="font-bold text-lg leading-relaxed text-slate-800" {...editProps}>{s?.ko}</div></div><div className="ml-6 border-b border-slate-300 h-8"></div></div>)}</div>, false)}
               {Part('p2', '중요문장 영작', 'PART 10', <div className="space-y-12">{Array.isArray(data.keySentences) && data.keySentences.map((s: any, k: number) => <div key={k}><div className="flex items-start mb-2"><span className="font-bold text-blue-600 mr-2 mt-1">{k + 1}.</span><div className="font-bold text-lg leading-relaxed text-slate-800" {...editProps}>{s?.ko}</div></div><div className="mb-4 ml-6 p-3 bg-slate-50 border border-slate-200 rounded text-sm text-slate-600 font-bold"><span className="text-blue-600 mr-2">[조건]</span><span {...editProps}>{s?.clue || '문맥에 맞게 영작하시오.'}</span></div><div className="ml-6 space-y-4"><div className="border-b border-slate-300 h-8"></div><div className="border-b border-slate-300 h-8"></div></div></div>)}</div>, false)}
-              {Part('p10', '요약문 빈칸', 'PART 11', <div><div className="passage-box mb-6 leading-loose text-lg text-justify" {...editProps}>{data.summary10?.text}</div><div className="text-sm font-bold text-slate-500 bg-slate-50 p-3 rounded border border-slate-200">[조건: 본문의 단어를 활용하되 필요 시 어형 변화, 유의어 사용 권장]</div></div>, false)}
+              {Part('p10', '요약문 빈칸', 'PART 11',
+                <div>
+                  <div
+                    className="passage-box mb-6 leading-loose text-lg text-justify"
+                    {...editProps}
+                    dangerouslySetInnerHTML={{
+                      __html: (data.summary10?.text || '')
+                        .replace(/\(A\)/g, '<span class="inline-block whitespace-nowrap"><span class="font-bold mr-1">(A)</span><span class="inline-block border-b-2 border-slate-800 w-[80px] mx-1 mb-[-4px]"></span></span>')
+                        .replace(/\(B\)/g, '<span class="inline-block whitespace-nowrap"><span class="font-bold mr-1">(B)</span><span class="inline-block border-b-2 border-slate-800 w-[80px] mx-1 mb-[-4px]"></span></span>')
+                    }}
+                  />
+                  <div className="text-sm font-bold text-slate-500 bg-slate-50 p-3 rounded border border-slate-200">[조건: 본문의 단어를 활용하되 필요 시 어형 변화, 유의어 사용 권장]</div>
+                </div>,
+                false
+              )}
             </div>
           );
         })}
