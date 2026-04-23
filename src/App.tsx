@@ -862,7 +862,7 @@ export default function App() {
                     <tbody>
                       {Array.isArray(data.grammar?.corrections) && data.grammar.corrections.map((c: any, k: number) => (
                         <tr key={k}>
-                          <td className="font-bold text-center text-blue-600">{c?.num ? (['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧'][c.num - 1] || c.num) : (k + 1)}</td>
+                          <td className="font-bold text-center text-blue-600">{c?.num ? (['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩', '⑪', '⑫', '⑬', '⑭', '⑮'][c.num - 1] || c.num) : (k + 1)}</td>
                           <td className="font-bold h-10 align-middle border-b border-slate-100" {...editProps}></td>
                           <td className="text-blue-600 font-bold h-10 align-middle border-b border-slate-100" {...editProps}></td>
                           <td className="text-xs text-slate-500 h-10 align-middle border-b border-slate-100" {...editProps}></td>
