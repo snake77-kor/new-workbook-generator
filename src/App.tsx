@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 
 // -----------------------------------------------------------------------------
 // 1. 스타일 정의 (New Design System + A4 Full Optimization)
@@ -205,15 +205,17 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadingPart, setLoadingPart] = useState<string | null>(null);
   const [viewPart, setViewPart] = useState('all');
+  const [selectedModel, setSelectedModel] = useState('auto');
   const [selectedParts, setSelectedParts] = useState<Set<string>>(new Set());
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
 
-  const [failedPassages, setFailedPassages] = useState<Set<number>>(new Set());
-  const [failureReasons, setFailureReasons] = useState<Record<number, string>>({});
+  const [failedParts, setFailedParts] = useState<Record<number, Set<string>>>({});
+  const [failureReasons, setFailureReasons] = useState<Record<string, string>>({}); // Keyed by "passageId-partId"
 
   const printRef = useRef<HTMLDivElement>(null);
+  const isGeneratingRef = useRef(false);
   const editProps = { contentEditable: true, suppressContentEditableWarning: true };
 
   const handleKeyChange = (e: any) => {
@@ -228,10 +230,79 @@ export default function App() {
     setSelectedParts(newSet);
   };
 
+  // --- NEW: Loading and Saving CDP Logic ---
+  const applyLoadedData = (jsonData: any) => {
+    try {
+      if (jsonData.passages) setPassages(jsonData.passages);
+      if (jsonData.workbooks) setWorkbooks(jsonData.workbooks);
+      if (jsonData.selectedModel) setSelectedModel(jsonData.selectedModel);
+      if (jsonData.selectedParts) setSelectedParts(new Set(jsonData.selectedParts));
+      if (jsonData.viewPart) setViewPart(jsonData.viewPart);
+      setStatusMsg("📂 데이터 로드 완료!");
+      setTimeout(() => setStatusMsg(null), 3000);
+    } catch (e) {
+      console.error("Load error:", e);
+      setErrorMsg("파일 형식이 올바르지 않습니다.");
+    }
+  };
+
+  useEffect(() => {
+    // Check for hash data on mount
+    const hash = window.location.hash;
+    if (hash.startsWith('#data=')) {
+      try {
+        const b64 = hash.substring(6);
+        const jsonStr = atob(b64);
+        const jsonData = JSON.parse(jsonStr);
+        applyLoadedData(jsonData);
+        // Clean up hash after loading
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      } catch (e) {
+        console.error("Hash load error:", e);
+      }
+    }
+  }, []);
+
+  const handleSaveCDP = () => {
+    const dataToSave = {
+      passages,
+      workbooks,
+      selectedModel,
+      selectedParts: Array.from(selectedParts),
+      viewPart,
+      version: "1.0"
+    };
+    const jsonStr = JSON.stringify(dataToSave, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `Workbook_${new Date().toISOString().slice(0, 10)}.cdp`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setStatusMsg("💾 .cdp 파일로 저장되었습니다.");
+    setTimeout(() => setStatusMsg(null), 3000);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const jsonData = JSON.parse(ev.target?.result as string);
+        applyLoadedData(jsonData);
+      } catch (err) {
+        setErrorMsg("파일 읽기 오류");
+      }
+    };
+    reader.readAsText(file);
+  };
+
   const handleDownloadHTML = () => {
     if (!printRef.current) return;
     const contentHTML = printRef.current.innerHTML;
-    const fullHTML = `< !DOCTYPE html > <html lang="ko"><head><meta charset="UTF-8"><title>Workbook</title><script src="https://cdn.tailwindcss.com"></script><style>${STYLES}</style></head><body>${contentHTML}</body></html>`;
+    const fullHTML = `<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><title>Workbook</title><script src="https://cdn.tailwindcss.com"></script><style>${STYLES}</style></head><body>${contentHTML}</body></html>`;
     try {
       const blob = new Blob([fullHTML], { type: 'text/html;charset=utf-8' });
       const link = document.createElement('a');
@@ -262,13 +333,48 @@ export default function App() {
 
   const discoverModel = async (key: string) => {
     try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
-      if (!response.ok) throw new Error("API 키 확인 실패");
+      // 1.5 stable models are available in v1.
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1/models?key=${key}`);
+      if (!response.ok) {
+        if (response.status === 400 || response.status === 403) {
+            throw new Error("API 키가 올바르지 않거나 권한이 없습니다. (Google AI Studio에서 키를 확인해주세요)");
+        }
+        // Fallback to v1beta for newer/exp models
+        const resBeta = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
+        if (!resBeta.ok) {
+            if (resBeta.status === 400 || resBeta.status === 403) {
+                throw new Error("API 키가 올바르지 않거나 권한이 없습니다. (Google AI Studio에서 키를 확인해주세요)");
+            }
+            throw new Error(`API 키 확인 실패 (상태 코드: ${resBeta.status})`);
+        }
+        const dataBeta = await resBeta.json();
+        const bestBeta = findBestModelFromList(dataBeta.models);
+        return bestBeta;
+      }
       const data = await response.json();
-      if (!data.models) return "gemini-1.5-flash";
-      const best = data.models.find((m: any) => m.name.includes("gemini-1.5-pro")) || data.models.find((m: any) => m.name.includes("flash")) || data.models[0];
-      return best.name.replace("models/", "");
-    } catch (e) { return "gemini-1.5-flash"; }
+      const best = findBestModelFromList(data.models);
+      return best;
+    } catch (e: any) { 
+      console.warn("Model discovery failed, using default fallback (gemini-1.5-flash).", e);
+      // If it's a specific API key error we already caught, re-throw it
+      if (e.message.includes("API 키")) throw e;
+      return "gemini-1.5-flash"; 
+    }
+  };
+
+  const findBestModelFromList = (models: any[]) => {
+    if (!models || models.length === 0) return "gemini-1.5-flash-latest";
+    // Priority: Stable 1.5 -> Exp 2.0 -> Other 1.5 -> Others
+    const best = models.find((m: any) => m.name.includes("gemini-1.5-flash-latest")) ||
+                 models.find((m: any) => m.name.includes("gemini-1.5-flash-002")) ||
+                 models.find((m: any) => m.name.includes("gemini-1.5-flash-001")) ||
+                 models.find((m: any) => m.name.includes("gemini-1.5-flash")) || 
+                 models.find((m: any) => m.name.includes("gemini-1.5-pro-latest")) ||
+                 models.find((m: any) => m.name.includes("gemini-1.5-pro")) || 
+                 models.find((m: any) => m.name.includes("gemini-2.0-flash-exp")) ||
+                 models.find((m: any) => m.name.includes("gemini-2.0-flash-001")) ||
+                 models[0];
+    return best ? best.name.replace("models/", "") : "gemini-1.5-flash-latest";
   };
 
   const fetchWithRetry = async (url: string, options: any, retries = 1): Promise<any> => {
@@ -276,15 +382,22 @@ export default function App() {
       const response = await fetch(url, options);
       if (!response.ok) {
         if (response.status === 429 && retries > 0) {
-          await delay(3000);
+          await delay(5000);
           return fetchWithRetry(url, options, retries - 1);
         }
         const errBody = await response.json();
-        throw new Error(`API Error ${response.status}: ${errBody.error?.message || response.statusText}`);
+        const msg = errBody.error?.message || "";
+        if (msg.toLowerCase().includes("api key not valid")) {
+            throw new Error("입력하신 API 키가 올바르지 않습니다. 다시 확인해 주세요.");
+        }
+        if (msg.toLowerCase().includes("quota")) {
+            throw new Error("API 사용량이 초과되었습니다. 잠시 후 다시 시도하거나 다른 키를 사용해 주세요.");
+        }
+        throw new Error(`API Error ${response.status}: ${msg || response.statusText}`);
       }
       return response.json();
     } catch (e) {
-      if (retries > 0) {
+      if (retries > 0 && !(e instanceof Error && e.message.includes("API 키"))) {
         await delay(3000);
         return fetchWithRetry(url, options, retries - 1);
       }
@@ -293,29 +406,54 @@ export default function App() {
   };
 
   const handleGenerate = async (partId: string) => {
-    setErrorMsg(null); setStatusMsg("📡 AI 모델 탐색 등...");
+    if (isGeneratingRef.current) {
+      setErrorMsg("이미 작업이 진행 중입니다. 잠시만 기다려주세요.");
+      return;
+    }
+
+    setErrorMsg(null); setStatusMsg("📡 AI 모델 탐색 중...");
     const cleanKey = apiKey.trim();
     if (!cleanKey) { setErrorMsg('API Key를 입력해주세요.'); return; }
     const targets = passages.filter(p => p.content.trim());
-    if (targets.length === 0) { setErrorMsg('지문 없음'); return; }
+    if (targets.length === 0) { setErrorMsg('지문 내용을 입력해주세요.'); return; }
 
-    setIsLoading(true); setLoadingPart(partId); setViewPart(partId);
-    setFailedPassages(new Set());
-    setFailureReasons({});
-
-    // Define the sequence of parts to generate
     const tasks = partId === 'all'
       ? ['p0', 'p1', 'p3', 'p4', 'p5', 'p6', 'p8', 'p9', 'p7', 'p2', 'p10']
-      : [partId];
+      : (partId === 'selected' ? Array.from(selectedParts) : [partId]);
 
-    // Calculate total operations for progress bar
+    if (tasks.length === 0) {
+      if (partId === 'selected') setErrorMsg('선택된 항목이 없습니다. 체크박스를 선택하거나 개별 항목 버튼을 눌러주세요.');
+      return;
+    }
+
+    isGeneratingRef.current = true;
+    const effectiveViewPart = partId;
+    setIsLoading(true); setLoadingPart(partId); setViewPart(effectiveViewPart);
+    
+    // Clear failed state for new run
+    setFailedParts({});
+    setFailureReasons({});
+
     const totalOps = targets.length * tasks.length;
     setProgress({ current: 0, total: totalOps });
 
     try {
-      const modelName = await discoverModel(cleanKey);
-      let opIndex = 0;
+      let modelName = selectedModel;
+      if (modelName === 'auto') {
+        modelName = await discoverModel(cleanKey);
+      }
+      
+      let currentModelName = modelName.trim();
+      currentModelName = currentModelName.startsWith('models/') ? currentModelName.replace('models/', '') : currentModelName;
 
+      // Always use v1beta as it supports all advanced JSON features and new models
+      let currentApiVersion = "v1beta";
+      
+      // Explicitly map generic aliases to latest to avoid basic 404s
+      if (currentModelName === "gemini-1.5-flash") currentModelName = "gemini-1.5-flash-latest";
+      if (currentModelName === "gemini-1.5-pro") currentModelName = "gemini-1.5-pro-latest";
+      
+      let opIndex = 0;
       for (const pid of tasks) {
         for (let i = 0; i < targets.length; i++) {
           const p = targets[i];
@@ -329,21 +467,65 @@ export default function App() {
           const pLabel = partNameMap[pid] || pid;
           setStatusMsg(`🚀 [${opIndex}/${totalOps}] ${modelName} : ${pLabel} 생성 중...`);
 
-          try {
-            const data = await fetchWithRetry(
-              `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${cleanKey}`,
+          const generateAttempt = async (targetModel: string, targetVersion: string): Promise<any> => {
+            const isLegacy = targetModel === 'gemini-pro' || targetModel === 'gemini-1.0-pro';
+            const genConfig: any = { temperature: 0.7 };
+            if (!isLegacy) {
+              genConfig.responseMimeType = "application/json";
+            }
+            
+            return await fetchWithRetry(
+              `https://generativelanguage.googleapis.com/${targetVersion}/models/${targetModel}:generateContent?key=${cleanKey}`,
               {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                  'Content-Type': 'application/json',
+                  'x-goog-api-key': cleanKey
+                },
                 body: JSON.stringify({
-                  contents: [{ parts: [{ text: getPrompt(pid, p.content) }] }],
-                  generationConfig: { responseMimeType: "application/json" }
+                  contents: [{ parts: [{ text: getPrompt(pid, p.content) + "\nReturn ONLY valid JSON." }] }],
+                  generationConfig: genConfig
                 })
               }
             );
+          };
+
+          try {
+            let data;
+            try {
+              data = await generateAttempt(currentModelName, currentApiVersion);
+            } catch (err: any) {
+              if (err.message.includes("404") || err.message.includes("not found")) {
+                 console.warn(`Model ${currentModelName} failed, attempting fallbacks...`);
+                 const fallbacks = [
+                   { m: 'gemini-1.5-flash-latest', v: 'v1beta' },
+                   { m: 'gemini-1.5-pro-latest', v: 'v1beta' },
+                   { m: 'gemini-pro', v: 'v1' }
+                 ].filter(f => f.m !== currentModelName);
+                 
+                 let success = false;
+                 let lastError = err;
+                 for (const fb of fallbacks) {
+                   try {
+                     data = await generateAttempt(fb.m, fb.v);
+                     success = true;
+                     console.log(`Fallback to ${fb.m} succeeded.`);
+                     break;
+                   } catch (fbErr: any) {
+                     console.warn(`Fallback to ${fb.m} failed:`, fbErr.message);
+                     lastError = fbErr; // keep track of the most recent error
+                   }
+                 }
+                 if (!success) {
+                   throw new Error(`모든 모델 시도 실패. 마지막 오류: ${lastError.message}`);
+                 }
+              } else {
+                 throw err;
+              }
+            }
 
             const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (!text) throw new Error('No generated text found.');
+            if (!text) throw new Error('AI 응답을 받지 못했습니다. (' + (data.error?.message || '알 수 없는 에러') + ')');
 
             let newData;
             try {
@@ -354,7 +536,7 @@ export default function App() {
               if (jsonStart !== -1 && jsonEnd !== -1) {
                 newData = JSON.parse(text.substring(jsonStart, jsonEnd + 1));
               } else {
-                throw new Error("Invalid JSON structure");
+                throw new Error("올바른 JSON 형식이 아닙니다.");
               }
             }
 
@@ -364,21 +546,30 @@ export default function App() {
 
           } catch (innerErr: any) {
             console.error(`Generate Error (${pid})`, innerErr);
-            // If it's a single part request, mark as failed. If 'all', just log and continue (partial success).
-            if (tasks.length === 1) {
-              setFailedPassages(prev => new Set(prev).add(p.id));
-              setFailureReasons(prev => ({ ...prev, [p.id]: innerErr.message || "Unknown error" }));
-            }
+            const errorKey = `${p.id}-${pid}`;
+            setFailedParts(prev => ({
+              ...prev,
+              [p.id]: new Set([...(prev[p.id] || []), pid])
+            }));
+            setFailureReasons(prev => ({ ...prev, [errorKey]: innerErr.message || "Unknown error" }));
           }
 
-          // Delay to help avoid 429 errors (Rate Limit)
-          if (opIndex < totalOps) {
-            await delay(1200);
-          }
+          if (opIndex < totalOps) await delay(2000); // Rate limit guard
         }
       }
-      setStatusMsg("✅ 완료!"); setTimeout(() => setStatusMsg(null), 4000);
-    } catch (e: any) { setErrorMsg(e.message); } finally { setIsLoading(false); setLoadingPart(null); setProgress({ current: 0, total: 0 }); }
+      setStatusMsg("✅ 모든 생성이 완료되었습니다!"); 
+      if (Object.keys(failureReasons).length > 0) {
+        setErrorMsg(`${Object.keys(failureReasons).length}개의 항목 생성에 실패했습니다. 실패한 항목을 개별적으로 다시 시도해 보세요.`);
+      }
+      setTimeout(() => setStatusMsg(null), 4000);
+    } catch (e: any) { 
+      setErrorMsg(e.message); 
+    } finally { 
+      setIsLoading(false); 
+      setLoadingPart(null); 
+      setProgress({ current: 0, total: 0 }); 
+      isGeneratingRef.current = false;
+    }
   };
 
 
@@ -397,7 +588,7 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] flex flex-col font-sans overflow-hidden">
+    <div className="min-h-screen bg-[#f8fafc] flex flex-col font-sans">
       <style>{STYLES}</style>
       <header className="h-16 bg-white border-b flex items-center justify-between px-8 no-print shadow-sm z-50">
         <div className="flex items-center gap-3"><div className="bg-blue-600 text-white p-1.5 rounded-lg font-black text-lg">TE</div><h1 className="text-xl font-black text-slate-800">TOP English</h1></div>
@@ -405,24 +596,45 @@ export default function App() {
       {isLoading && progress.total > 0 && <div className="w-full h-1.5 bg-slate-100 no-print"><div className="h-full bg-blue-600 transition-all" style={{ width: `${(progress.current / progress.total) * 100}%` }}></div></div>}
       {(errorMsg || statusMsg) && <div className={`p-3 text-center font-bold no-print text-white ${errorMsg ? 'bg-red-500' : 'bg-blue-600'}`}>{errorMsg || statusMsg}</div>}
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex">
         <aside className="w-72 bg-white border-r p-6 no-print flex flex-col gap-6 shadow-sm z-10 overflow-y-auto">
           <div>
-            <h2 className="text-sm font-bold text-slate-500 mb-4">Configuration</h2>
-            <input type="password" value={apiKey} onChange={handleKeyChange} className="w-full border p-2 rounded mb-4" placeholder="API Key" />
-
+            <input type="password" value={apiKey} onChange={handleKeyChange} className="w-full border p-2 rounded mb-2" placeholder="API Key" />
+            <select 
+              value={selectedModel} 
+              onChange={(e) => setSelectedModel(e.target.value)}
+              className="w-full border p-2 rounded mb-4 text-xs font-bold text-slate-600 bg-slate-50"
+            >
+              <option value="auto">🤖 자동 모델 선택 (추천)</option>
+              <option value="gemini-1.5-flash-latest">⚡ Gemini 1.5 Flash (안정/고속)</option>
+              <option value="gemini-1.5-pro-latest">💎 Gemini 1.5 Pro (고품질)</option>
+              <option value="gemini-2.0-flash-exp">🚀 Gemini 2.0 Flash (실험용)</option>
+              <option value="gemini-2.0-flash-lite-preview-0815">🌱 Gemini 2.0 Flash Lite</option>
+            </select>
           </div>
           <div className="flex-1 overflow-y-auto space-y-1">
-            <button
-              onClick={() => handleGenerate(selectedParts.size > 0 ? 'selected' : 'all')}
-              className="sidebar-btn gen-all-btn mb-4 w-full"
-              style={{ minHeight: '56px', whiteSpace: 'nowrap', justifyContent: 'center' }}
-            >
-              {isLoading && (loadingPart === 'all' || loadingPart === 'selected')
-                ? <><span className="animate-spin mr-2 flex-shrink-0">⌛</span>생성 중...</>
-                : (selectedParts.size > 0 ? `⚡ 선택 항목 생성 (${selectedParts.size})` : "⚡ 전체 워크북 생성")
-              }
-            </button>
+            <div className="flex gap-2 mb-4">
+              <button
+                onClick={() => handleGenerate(selectedParts.size > 0 ? 'selected' : 'all')}
+                disabled={isLoading}
+                className={`sidebar-btn gen-all-btn flex-1 ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                style={{ minHeight: '56px', whiteSpace: 'nowrap', justifyContent: 'center' }}
+              >
+                {isLoading && (loadingPart === 'all' || loadingPart === 'selected')
+                  ? <><span className="animate-spin mr-2 flex-shrink-0">⌛</span>생성 중...</>
+                  : (selectedParts.size > 0 ? `⚡ 선택 생성 (${selectedParts.size})` : "⚡ 전체 생성")
+                }
+              </button>
+              {selectedParts.size > 0 && (
+                <button 
+                  onClick={() => setSelectedParts(new Set())}
+                  className="bg-slate-200 text-slate-600 px-3 rounded-xl hover:bg-slate-300 transition-colors"
+                  title="선택 해제"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
             {PARTS_LIST.map((item, i) => (
               <div key={i} className="flex gap-2 items-center mb-1">
                 <div className="h-full flex items-center">
@@ -433,13 +645,24 @@ export default function App() {
                     onChange={() => togglePart(item.id)}
                   />
                 </div>
-                <button onClick={() => handleGenerate(item.id)} className={`sidebar-btn flex-1 mb-0 justify-between ${viewPart === item.id ? 'active' : ''}`}>
+                <button 
+                  onClick={() => handleGenerate(item.id)} 
+                  disabled={isLoading}
+                  className={`sidebar-btn flex-1 mb-0 justify-between ${viewPart === item.id ? 'active' : ''} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
                   <span>Part {i + 1}. {item.label}</span>
                 </button>
               </div>
             ))}
           </div>
-          <button onClick={handleDownloadHTML} className="w-full bg-blue-50 text-blue-600 py-3 rounded font-bold text-xs mt-4">HTML 다운로드</button>
+          <div className="flex flex-col gap-2 mt-4">
+            <button onClick={handleDownloadHTML} className="w-full bg-blue-50 text-blue-600 py-3 rounded font-bold text-xs">HTML 다운로드</button>
+            <button onClick={handleSaveCDP} className="w-full bg-slate-900 text-white py-3 rounded font-bold text-xs">작업 내용 저장 (.cdp)</button>
+            <label className="w-full bg-slate-100 text-slate-600 py-3 rounded font-bold text-xs text-center cursor-pointer hover:bg-slate-200 transition-colors">
+              파일 불러오기 (.cdp)
+              <input type="file" accept=".cdp,.json" onChange={handleFileUpload} className="hidden" />
+            </label>
+          </div>
         </aside>
 
         <main className="flex-1 overflow-y-auto p-10 no-print bg-[#f1f5f9]">
@@ -480,36 +703,49 @@ export default function App() {
             grammar: ensureObject(rawData.grammar),
             blanks: ensureObject(rawData.blanks),
             tf: ensureArray(rawData.tf),
+            tf_set: ensureObject(rawData.tf_set),
             fullTranslation: ensureArray(rawData.fullTranslation),
             arrangement: ensureArray(rawData.arrangement),
             guided: ensureArray(rawData.guided),
             summary10: ensureObject(rawData.summary10),
           };
           const name = wb.passageName;
-          const isFailed = failedPassages.has(p.id);
-
-          const isTarget = (k: string) => (viewPart === 'all' || viewPart === k);
+          
+          const isTarget = (k: string) => {
+            if (viewPart === 'all') return true;
+            if (viewPart === 'selected') return selectedParts.has(k);
+            return viewPart === k;
+          };
           const hasData = (d: any) => (d && (Array.isArray(d) ? d.length > 0 : Object.keys(d).length > 0));
 
           const Part = (key: string, title: string, step: string, content: React.ReactNode, _unused?: any) => {
             if (!isTarget(key)) return null;
+            
+            const isPartFailed = failedParts[p.id]?.has(key);
+            const errorKey = `${p.id}-${key}`;
+            
             const map: any = {
               p0: 'vocabulary', p1: 'translation', p2: 'keySentences', p3: 'ordering',
-              p4: 'grammar', p5: 'blanks', p6: 'tf', p7: 'fullTranslation',
+              p4: 'grammar', p5: 'blanks', p6: 'tf_set', p7: 'fullTranslation',
               p8: 'arrangement', p9: 'guided', p10: 'summary10'
             };
             const dataKey = map[key];
             const realData = data[dataKey];
 
-            // Render FRAME first, then content or loading. 
-            // This prevents "white screen" because the component structure always exists.
-            let inner = content;
-            if (!hasData(realData)) {
-              if (isFailed) {
-                inner = <div className="error-box">생성 실패: {failureReasons[p.id] || "잠시 후 다시 시도해주세요."}</div>
-              } else {
-                // Keep the structure but show loading text
-                inner = (
+            // 1. Success case: data exists
+            if (hasData(realData)) {
+                return renderWorkbookCard(name, title, step, content);
+            }
+
+            // 2. Failure case: generation failed for THIS specific part
+            if (isPartFailed) {
+                return renderWorkbookCard(name, title, step, <div className="error-box">생성 실패: {failureReasons[errorKey] || "잠시 후 다시 시도해주세요."}</div>);
+            }
+
+            // Show loading state ONLY when actually loading
+            const isCurrentlyLoading = isLoading && (loadingPart === 'all' || loadingPart === 'selected' || loadingPart === key);
+            if (isCurrentlyLoading) {
+                return renderWorkbookCard(name, title, step, (
                   <div className="w-full py-20 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-lg bg-slate-50 text-slate-400">
                     <div className="animate-spin text-2xl mb-2">⌛</div>
                     <div className="font-bold text-center px-4">
@@ -532,11 +768,11 @@ export default function App() {
                                       : "AI가 문제를 생성하고 있습니다..."}
                     </div>
                   </div>
-                );
-              }
+                ));
             }
 
-            return renderWorkbookCard(name, title, step, inner);
+            // If no data and not loading, don't show the card at all
+            return null;
           };
 
           return (
@@ -549,9 +785,9 @@ export default function App() {
                       {Array.isArray(data.vocabulary) && data.vocabulary.map((v: any, k: number) => (
                         <tr key={k}>
                           <td><div className="vocab-word" {...editProps}>{v?.word}</div></td>
-                          <td><div className="vocab-mean" {...editProps}></div></td>
-                          <td><div className="vocab-meta" {...editProps}></div></td>
-                          <td><div className="vocab-meta" {...editProps}></div></td>
+                          <td><div className="vocab-mean" {...editProps}>{v?.mean}</div></td>
+                          <td><div className="vocab-meta" {...editProps}>{v?.syn}</div></td>
+                          <td><div className="vocab-meta" {...editProps}>{v?.ant}</div></td>
                         </tr>
                       ))}
                     </tbody>
@@ -562,9 +798,9 @@ export default function App() {
                       <div className="confusable-grid">
                         {data.confusable.map((c: any, k: number) => (
                           <div key={k} className="confusable-item">
-                            <div><span className="confusable-word">{c?.w1}</span> <span className="text-sm text-slate-600"></span></div>
+                            <div><span className="confusable-word">{c?.w1}</span> <span className="text-sm text-slate-600" {...editProps}>{c?.m1}</span></div>
                             <div className="text-slate-400 font-bold text-xs mx-4">VS</div>
-                            <div className="text-right"><span className="confusable-word">{c?.w2}</span> <span className="text-sm text-slate-600"></span></div>
+                            <div className="text-right"><span className="confusable-word">{c?.w2}</span> <span className="text-sm text-slate-600" {...editProps}>{c?.m2}</span></div>
                           </div>
                         ))}
                       </div>
@@ -681,7 +917,11 @@ export default function App() {
             if (!hasAnyData) return null;
 
             // Helper to check view
-            const isTarget = (k: string) => (viewPart === 'all' || viewPart === k);
+            const isTarget = (k: string) => {
+              if (viewPart === 'all') return true;
+              if (viewPart === 'selected') return selectedParts.has(k);
+              return viewPart === k;
+            };
 
             return (
               <div key={p.id} className="mb-12 break-inside-avoid">
@@ -694,13 +934,33 @@ export default function App() {
                     <div>
                       <h4 className="answer-subtitle">Part 0. Vocabulary</h4>
                       <table className="answer-table">
-                        <thead><tr><th>Word</th><th>Meaning</th></tr></thead>
+                        <thead><tr><th>Word</th><th>Meaning</th><th>Synonym</th><th>Antonym</th></tr></thead>
                         <tbody>
                           {data.vocabulary.slice(0, 12).map((v: any, i: number) => (
-                            <tr key={i}><td className="font-bold">{v.word}</td><td>{v.mean}</td></tr>
+                            <tr key={i}>
+                              <td className="font-bold">{v.word}</td>
+                              <td>{v.mean}</td>
+                              <td className="text-xs text-slate-500">{v.syn || '-'}</td>
+                              <td className="text-xs text-slate-500">{v.ant || '-'}</td>
+                            </tr>
                           ))}
                         </tbody>
                       </table>
+                    </div>
+                  )}
+
+                  {/* Part 1: Translation */}
+                  {isTarget('p1') && data.translation?.length > 0 && (
+                    <div>
+                      <h4 className="answer-subtitle">Part 1. 한글해석</h4>
+                      <div className="space-y-2">
+                        {data.translation.map((s: any, i: number) => (
+                          <div key={i} className="text-xs border-b border-slate-100 pb-2">
+                            <div className="font-bold text-blue-600">[{i + 1}] {s.en}</div>
+                            <div className="text-slate-600">{s.ko}</div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
 
@@ -891,30 +1151,6 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* Part 10: Key Sentences (p2) -> Displayed as Part 10 */}
-                  {isTarget('p2') && data.keySentences?.length > 0 && (
-                    <div className="mb-6">
-                      <h4 className="answer-subtitle">Part 10. 중요문장 영작</h4>
-                      <table className="answer-table">
-                        <thead>
-                          <tr>
-                            <th className="w-16 text-center" style={{ backgroundColor: '#1e40af', color: 'white' }}>No.</th>
-                            <th style={{ backgroundColor: '#1e40af', color: 'white' }}>Correct Sentence</th>
-                            <th className="w-1/3" style={{ backgroundColor: '#1e40af', color: 'white' }}>Grammar Point</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {data.keySentences.map((s: any, i: number) => (
-                            <tr key={i}>
-                              <td className="text-center font-bold text-blue-600 border-r">{i + 1}</td>
-                              <td className="font-medium text-slate-800 border-r leading-relaxed">{s.en}</td>
-                              <td className="text-sm text-slate-500 italic">{s.point || '-'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
 
                   {/* Part 11: Summary10 (p10) -> Displayed as Part 11 */}
                   {isTarget('p10') && data.summary10?.blanks?.length > 0 && (
