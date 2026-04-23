@@ -496,28 +496,60 @@ export default function App() {
               data = await generateAttempt(currentModelName, currentApiVersion);
             } catch (err: any) {
               if (err.message.includes("404") || err.message.includes("not found")) {
-                 console.warn(`Model ${currentModelName} failed, attempting fallbacks...`);
-                 const fallbacks = [
-                   { m: 'gemini-1.5-flash-latest', v: 'v1beta' },
-                   { m: 'gemini-1.5-pro-latest', v: 'v1beta' },
-                   { m: 'gemini-pro', v: 'v1' }
-                 ].filter(f => f.m !== currentModelName);
+                 console.warn(`Model ${currentModelName} failed, dynamically fetching available models...`);
+                 
+                 // Fetch available models for this specific API key
+                 let availableModels: any[] = [];
+                 try {
+                   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`);
+                   if (res.ok) {
+                     const json = await res.json();
+                     availableModels = json.models || [];
+                   }
+                 } catch (e) {
+                   console.error("Failed to fetch available models", e);
+                 }
+                 
+                 // Filter to models that support generateContent and aren't the one that just failed
+                 const validFallbacks = availableModels
+                   .filter(m => 
+                     m.supportedGenerationMethods?.includes("generateContent") &&
+                     !m.name.includes(currentModelName) &&
+                     m.name.includes("gemini")
+                   )
+                   .map(m => m.name.replace('models/', ''));
+                   
+                 if (validFallbacks.length === 0) {
+                   validFallbacks.push('gemini-1.5-flash', 'gemini-1.0-pro'); // ultimate fallback
+                 }
                  
                  let success = false;
                  let lastError = err;
-                 for (const fb of fallbacks) {
+                 
+                 for (const fbModel of validFallbacks) {
                    try {
-                     data = await generateAttempt(fb.m, fb.v);
+                     console.log(`Attempting dynamic fallback to ${fbModel}`);
+                     // Try v1beta first, if it fails try v1
+                     try {
+                        data = await generateAttempt(fbModel, 'v1beta');
+                     } catch (v1betaErr: any) {
+                        if (v1betaErr.message.includes("404")) {
+                           data = await generateAttempt(fbModel, 'v1');
+                        } else {
+                           throw v1betaErr;
+                        }
+                     }
                      success = true;
-                     console.log(`Fallback to ${fb.m} succeeded.`);
+                     console.log(`Fallback to ${fbModel} succeeded.`);
                      break;
                    } catch (fbErr: any) {
-                     console.warn(`Fallback to ${fb.m} failed:`, fbErr.message);
-                     lastError = fbErr; // keep track of the most recent error
+                     console.warn(`Fallback to ${fbModel} failed:`, fbErr.message);
+                     lastError = fbErr; 
                    }
                  }
+                 
                  if (!success) {
-                   throw new Error(`모든 모델 시도 실패. 마지막 오류: ${lastError.message}`);
+                   throw new Error(`모든 모델 시도 실패. API 키의 모델 접근 권한을 확인해주세요. 마지막 오류: ${lastError.message}`);
                  }
               } else {
                  throw err;
